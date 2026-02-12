@@ -1,7 +1,6 @@
 [server]
-# For local development, bind to localhost and use Streamlit's default port
-headless = false
-address = "localhost"
+headless = true
+address = "0.0.0.0"
 port = 8501
 
 [theme]

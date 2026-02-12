@@ -1,3 +1,6 @@
+[tool.poetry]
+package-mode = false
+
 [project]
 name = "microsoft-purview-security-analyzer"
 version = "1.0.0"

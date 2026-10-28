@@ -29,11 +29,11 @@ long-running server with WebSockets, which Vercel Functions don't provide.
 **How it is laid out**:
 - `backend/server.py`: FastAPI app (the Vercel entrypoint, set in `[tool.vercel]` in `pyproject.toml`). It runs the analysis in `security_analyzer.py`.
 - `public/`: the front end (HTML, CSS, JS, plus vendored Leaflet and PapaParse), served from Vercel's CDN.
-- `vercel.json`: keeps the front end, images and docs out of the Python function bundle. The GeoLite2 database stays in.
+- No `vercel.json` is needed. The function bundle (dependencies plus the 58 MB GeoLite2 database) is about 250 MB, under Vercel's 500 MB Python limit.
 
 **Steps**:
 1. Import the repository in Vercel (or run `vercel deploy`)
-2. Leave the framework preset on FastAPI; no build command or environment variables are needed
+2. Set the framework preset to FastAPI (Project Settings > Build and Deployment). With the "Other" preset Vercel only serves `public/` and the API is missing. No build command or environment variables are needed
 
 **Limits to know**:
 - Vercel caps request bodies at 4.5 MB. CSV exports are trimmed in the browser to the four columns and three AuditData fields the analysis reads, then gzipped, so exports of tens of MB fit. Excel files are sent as-is, so they are limited to about 4.4 MB; export CSV from Purview for larger logs.

@@ -81,7 +81,121 @@ def get_ip_geolocation(ip, geo_reader=None):
         'Longitude': 0
     }
 
-def parse_audit_logs(file_path, geoip_db_path="./attached_assets/GeoLite2-City.mmdb"):
+# Default GeoLite2 location, resolved next to this module so it works no matter
+# what the working directory is (Vercel runs functions from the bundle root).
+DEFAULT_GEOIP_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "attached_assets", "GeoLite2-City.mmdb")
+
+REQUIRED_COLUMNS = ['CreationDate', 'Operation', 'UserId', 'AuditData']
+
+def open_geo_reader(geoip_db_path=DEFAULT_GEOIP_DB_PATH):
+    """
+    Open the GeoLite2 database, trying a few fallback locations.
+
+    Returns:
+    geoip2.database.Reader or None if no database could be opened
+    """
+    try:
+        if geoip_db_path and os.path.exists(geoip_db_path):
+            print(f"Successfully loaded GeoLite2 database from {geoip_db_path}")
+            return geoip2.database.Reader(geoip_db_path)
+        print(f"GeoLite2 database not found at {geoip_db_path}. Trying other locations...")
+        # Try alternate locations
+        alt_paths = [
+            "./attached_assets/GeoLite2-City.mmdb",
+            "GeoLite2-City.mmdb",
+            "./GeoLite2-City.mmdb",
+            "../attached_assets/GeoLite2-City.mmdb",
+            "/attached_assets/GeoLite2-City.mmdb",
+        ]
+        for alt_path in alt_paths:
+            if os.path.exists(alt_path):
+                print(f"Successfully loaded GeoLite2 database from {alt_path}")
+                return geoip2.database.Reader(alt_path)
+        print("GeoLite2 database not found in any location. IP geolocation will be limited.")
+    except Exception as e:
+        print(f"Error opening GeoIP database: {e}")
+    return None
+
+def load_audit_dataframe(file_path):
+    """Read a CSV or Excel audit log export into a DataFrame."""
+    file_extension = os.path.splitext(file_path)[1].lower()
+
+    if file_extension == '.csv':
+        return pd.read_csv(file_path)
+    elif file_extension in ['.xlsx', '.xls']:
+        return pd.read_excel(file_path)
+    raise ValueError(f"Unsupported file format: {file_extension}")
+
+def build_timeline(df, geo_reader=None):
+    """
+    Turn an audit log DataFrame into a timeline of events with geolocation data.
+
+    Parameters:
+    df (DataFrame): Audit log rows with the REQUIRED_COLUMNS
+    geo_reader: GeoLite2 database reader object (optional)
+
+    Returns:
+    list: Timeline of events with geolocation data
+    """
+    # Select relevant columns if they exist
+    for col in REQUIRED_COLUMNS:
+        if col not in df.columns:
+            raise ValueError(f"Required column '{col}' not found in the input file")
+
+    df = df[REQUIRED_COLUMNS].copy()
+
+    # Convert CreationDate to datetime for sorting
+    df['CreationDate'] = pd.to_datetime(df['CreationDate'])
+    df = df.sort_values(by='CreationDate')
+
+    # Parse AuditData and create a timeline with geolocation data
+    timeline = []
+    # Keep track of IPs we've already looked up to avoid repeated lookups
+    ip_geo_cache = {}
+
+    for _, row in df.iterrows():
+        try:
+            # Check if AuditData is a string, if so, parse it
+            audit_data = row['AuditData']
+            if isinstance(audit_data, str):
+                audit_data = json.loads(audit_data)
+            if not isinstance(audit_data, dict):
+                # If it doesn't hold a JSON object, skip this row
+                continue
+
+            event = {
+                'Timestamp': row['CreationDate'],
+                'Operation': row['Operation'],
+                'UserId': row['UserId'],
+                'ClientIP': audit_data.get('ClientIP', 'N/A'),
+                'ResultStatus': audit_data.get('ResultStatus', 'N/A')
+            }
+
+            # For FileAccessed events, extract the file name if available
+            if row['Operation'] == 'FileAccessed':
+                event['FileName'] = audit_data.get('SourceFileName', 'N/A')
+            else:
+                event['FileName'] = ''
+
+            # Lookup geolocation info for the IP (if possible)
+            ip = event['ClientIP']
+
+            # Use our cache to avoid looking up the same IP multiple times
+            if ip in ip_geo_cache:
+                event.update(ip_geo_cache[ip])
+            else:
+                # Get geolocation data and cache it
+                geo_data = get_ip_geolocation(ip, geo_reader)
+                ip_geo_cache[ip] = geo_data
+                event.update(geo_data)
+
+            timeline.append(event)
+        except json.JSONDecodeError:
+            print(f"Error parsing AuditData for record at {row['CreationDate']}")
+
+    return timeline
+
+def parse_audit_logs(file_path, geoip_db_path=DEFAULT_GEOIP_DB_PATH):
     """
     Parse audit logs from CSV or Excel file and return a timeline of events with geolocation data.
     
@@ -92,110 +206,16 @@ def parse_audit_logs(file_path, geoip_db_path="./attached_assets/GeoLite2-City.m
     Returns:
     list: Timeline of events with geolocation data
     """
+    geo_reader = open_geo_reader(geoip_db_path)
     try:
-        # Initialize GeoIP2 reader if database file exists
-        geo_reader = None
-        try:
-            if os.path.exists(geoip_db_path):
-                geo_reader = geoip2.database.Reader(geoip_db_path)
-                print(f"Successfully loaded GeoLite2 database from {geoip_db_path}")
-            else:
-                print(f"GeoLite2 database not found at {geoip_db_path}. Trying other locations...")
-                # Try alternate locations
-                alt_paths = [
-                    "GeoLite2-City.mmdb",
-                    "./GeoLite2-City.mmdb",
-                    "../attached_assets/GeoLite2-City.mmdb",
-                    "/attached_assets/GeoLite2-City.mmdb",
-                ]
-                for alt_path in alt_paths:
-                    if os.path.exists(alt_path):
-                        geo_reader = geoip2.database.Reader(alt_path)
-                        print(f"Successfully loaded GeoLite2 database from {alt_path}")
-                        break
-                
-                if not geo_reader:
-                    print("GeoLite2 database not found in any location. IP geolocation will be limited.")
-        except Exception as e:
-            print(f"Error opening GeoIP database: {e}")
-            geo_reader = None
-
-        # Determine file type and read accordingly
-        file_extension = os.path.splitext(file_path)[1].lower()
-        
-        if file_extension == '.csv':
-            df = pd.read_csv(file_path)
-        elif file_extension in ['.xlsx', '.xls']:
-            df = pd.read_excel(file_path)
-        else:
-            raise ValueError(f"Unsupported file format: {file_extension}")
-
-        # Select relevant columns if they exist
-        columns_of_interest = ['CreationDate', 'Operation', 'UserId', 'AuditData']
-        for col in columns_of_interest:
-            if col not in df.columns:
-                raise ValueError(f"Required column '{col}' not found in the input file")
-        
-        df = df[columns_of_interest]
-
-        # Convert CreationDate to datetime for sorting
-        df['CreationDate'] = pd.to_datetime(df['CreationDate'])
-        df = df.sort_values(by='CreationDate')
-
-        # Parse AuditData and create a timeline with geolocation data
-        timeline = []
-        # Keep track of IPs we've already looked up to avoid repeated lookups
-        ip_geo_cache = {}
-        
-        for _, row in df.iterrows():
-            try:
-                # Check if AuditData is a string, if so, parse it
-                audit_data = row['AuditData']
-                if isinstance(audit_data, str):
-                    audit_data = json.loads(audit_data)
-                elif not isinstance(audit_data, dict):
-                    # If it's neither a string nor a dict, skip this row
-                    continue
-                
-                event = {
-                    'Timestamp': row['CreationDate'],
-                    'Operation': row['Operation'],
-                    'UserId': row['UserId'],
-                    'ClientIP': audit_data.get('ClientIP', 'N/A'),
-                    'ResultStatus': audit_data.get('ResultStatus', 'N/A')
-                }
-                
-                # For FileAccessed events, extract the file name if available
-                if row['Operation'] == 'FileAccessed':
-                    event['FileName'] = audit_data.get('SourceFileName', 'N/A')
-                else:
-                    event['FileName'] = ''
-
-                # Lookup geolocation info for the IP (if possible)
-                ip = event['ClientIP']
-                
-                # Use our cache to avoid looking up the same IP multiple times
-                if ip in ip_geo_cache:
-                    event.update(ip_geo_cache[ip])
-                else:
-                    # Get geolocation data and cache it
-                    geo_data = get_ip_geolocation(ip, geo_reader)
-                    ip_geo_cache[ip] = geo_data
-                    event.update(geo_data)
-
-                timeline.append(event)
-            except json.JSONDecodeError:
-                print(f"Error parsing AuditData for record at {row['CreationDate']}")
-        
-        # Clean up geo reader
-        if geo_reader:
-            geo_reader.close()
-            
-        return timeline
-
+        return build_timeline(load_audit_dataframe(file_path), geo_reader)
     except Exception as e:
         print(f"Error processing file: {e}")
         raise
+    finally:
+        # Clean up geo reader
+        if geo_reader:
+            geo_reader.close()
 
 def is_ip_anomalous(event):
     """

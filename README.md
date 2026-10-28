@@ -76,6 +76,7 @@ The Microsoft Purview Security Analyzer is a web-based security analysis tool bu
 - **Trafilatura**: Text extraction and processing utilities
 
 ## Deployment Platforms
+- **Vercel**: Runs the FastAPI web app (`backend/server.py` + `public/`); see DEPLOYMENT.md
 - **Streamlit Cloud**: Recommended deployment platform for easy hosting
 - **Heroku**: Alternative cloud deployment option
 - **Local Development**: Standard Python environment with pip dependencies

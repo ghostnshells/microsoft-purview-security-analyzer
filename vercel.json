@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "backend/server.py": {
+      "excludeFiles": "{public/**,images/**,generated-icon.png,attached_assets/Pasted-*,*.md}"
+    }
+  }
+}

@@ -139,7 +139,7 @@ def parse_audit_logs(file_path, geoip_db_path="./attached_assets/GeoLite2-City.m
         df = df[columns_of_interest]
 
         # Convert CreationDate to datetime for sorting
-        df['CreationDate'] = pd.to_datetime(df['CreationDate'])
+        df['CreationDate'] = pd.to_datetime(df['CreationDate'], format='mixed', errors='coerce', utc=True)
         df = df.sort_values(by='CreationDate')
 
         # Parse AuditData and create a timeline with geolocation data
@@ -147,26 +147,26 @@ def parse_audit_logs(file_path, geoip_db_path="./attached_assets/GeoLite2-City.m
         # Keep track of IPs we've already looked up to avoid repeated lookups
         ip_geo_cache = {}
         
-        for _, row in df.iterrows():
+        for row in df.itertuples(index=False):
             try:
                 # Check if AuditData is a string, if so, parse it
-                audit_data = row['AuditData']
+                audit_data = row.AuditData
                 if isinstance(audit_data, str):
                     audit_data = json.loads(audit_data)
-                elif not isinstance(audit_data, dict):
+                if not isinstance(audit_data, dict):
                     # If it's neither a string nor a dict, skip this row
                     continue
                 
                 event = {
-                    'Timestamp': row['CreationDate'],
-                    'Operation': row['Operation'],
-                    'UserId': row['UserId'],
+                    'Timestamp': row.CreationDate,
+                    'Operation': row.Operation,
+                    'UserId': row.UserId,
                     'ClientIP': audit_data.get('ClientIP', 'N/A'),
                     'ResultStatus': audit_data.get('ResultStatus', 'N/A')
                 }
                 
                 # For FileAccessed events, extract the file name if available
-                if row['Operation'] == 'FileAccessed':
+                if row.Operation == 'FileAccessed':
                     event['FileName'] = audit_data.get('SourceFileName', 'N/A')
                 else:
                     event['FileName'] = ''
@@ -185,17 +185,16 @@ def parse_audit_logs(file_path, geoip_db_path="./attached_assets/GeoLite2-City.m
 
                 timeline.append(event)
             except json.JSONDecodeError:
-                print(f"Error parsing AuditData for record at {row['CreationDate']}")
+                print(f"Error parsing AuditData for record at {row.CreationDate}")
         
-        # Clean up geo reader
-        if geo_reader:
-            geo_reader.close()
-            
         return timeline
 
     except Exception as e:
         print(f"Error processing file: {e}")
         raise
+    finally:
+        if geo_reader:
+            geo_reader.close()
 
 def is_ip_anomalous(event):
     """
@@ -345,8 +344,8 @@ def apply_filters(events, filter_config):
     # Add risk level and anomaly type to each event
     for event in events:
         event_copy = event.copy()
-        event_copy['RiskLevel'] = assign_risk_level(event_copy)
-        event_copy['AnomalyTypes'] = classify_anomaly_type(event_copy)
+        event_copy['RiskLevel'] = event.get('RiskLevel') or assign_risk_level(event_copy)
+        event_copy['AnomalyTypes'] = event.get('AnomalyTypes') or classify_anomaly_type(event_copy)
         filtered_events.append(event_copy)
     
     # Apply risk level filter

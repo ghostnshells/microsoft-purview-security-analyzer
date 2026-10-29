@@ -219,3 +219,15 @@ logger = logging.getLogger(__name__)
 - Progress indicators for long operations
 
 This development guide should be updated as the project evolves and new features are added.
+### Dashboard regression checks
+
+Run `python -m unittest discover -s tests -v` from the repository root with the
+application dependencies installed. Tests use synthetic CSV/XLSX audit logs and
+Streamlit's AppTest harness; they cover result tables, repeated renders,
+same-name replacement uploads, mixed timestamps, and bounded map summaries.
+
+Map pins show a compact latest-event summary on hover. Click a pin or choose a
+location below the map to browse all its events in a separate table. Events
+without usable coordinates remain available in the event tables. Displayed
+timestamps and time-based filters use UTC; timestamps without an offset are
+interpreted as UTC. Unparseable timestamps display as Unknown.

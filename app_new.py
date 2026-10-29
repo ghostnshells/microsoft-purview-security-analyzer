@@ -5,6 +5,8 @@ from streamlit_folium import st_folium
 import tempfile
 import os
 import json
+import hashlib
+from dashboard_views import event_table, group_locations, create_activity_map
 from security_analyzer import parse_audit_logs, detect_compromised_events, filter_files_accessed, filter_anomalous_ips, apply_filters
 
 # Initialize session state variables to store processed data between re-renders
@@ -130,67 +132,6 @@ def save_uploaded_file(uploaded_file):
         st.error(f"Error saving file: {e}")
         return None
 
-# Function to create map with anomalous IPs
-def create_map(anomalous_ips):
-    # Create a map centered at a default location
-    m = folium.Map(location=[20, 0], zoom_start=2)
-    
-    # Add markers for each anomalous IP
-    ip_locations = {}
-    
-    for idx, event in enumerate(anomalous_ips):
-        # Skip if Country or Region is unknown
-        if event.get('Country') == 'Unknown' or event.get('Region') == 'Unknown':
-            continue
-        
-        # Get location and create a unique key
-        lat = event.get('Latitude', 0)
-        lon = event.get('Longitude', 0)
-        
-        if lat == 0 and lon == 0:
-            continue
-            
-        location_key = f"{lat}_{lon}"
-        
-        # Check if we already have a marker at this location
-        if location_key in ip_locations:
-            ip_locations[location_key]['count'] += 1
-            ip_locations[location_key]['events'].append(event)
-        else:
-            ip_locations[location_key] = {
-                'lat': lat,
-                'lon': lon,
-                'count': 1,
-                'events': [event]
-            }
-    
-    # Add markers for each unique location
-    for location_key, location_data in ip_locations.items():
-        # Create popup with all events at this location
-        popup_content = "<div style='width: 300px'><h4>Location Events</h4>"
-        for idx, event in enumerate(location_data['events']):
-            popup_content += f"""
-            <div style="margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 5px;">
-                <p><b>Event {idx+1}</b></p>
-                <p><b>IP Address:</b> {event.get('ClientIP', 'N/A')}</p>
-                <p><b>Timestamp:</b> {event.get('Timestamp', 'N/A')}</p>
-                <p><b>Operation:</b> {event.get('Operation', 'N/A')}</p>
-                <p><b>User ID:</b> {event.get('UserId', 'N/A')}</p>
-                <p><b>Location:</b> {event.get('Region', 'Unknown')}, {event.get('Country', 'Unknown')}</p>
-            </div>
-            """
-        popup_content += "</div>"
-        
-        # Add marker with the count of events
-        folium.Marker(
-            location=[location_data['lat'], location_data['lon']],
-            popup=folium.Popup(popup_content, max_width=350),
-            tooltip=f"{location_data['count']} event(s) at this location",
-            icon=folium.Icon(color='red', icon='info-sign')
-        ).add_to(m)
-    
-    return m
-
 # Function to process the data (only runs when we need to)
 def process_data(file_path):
     # Set up a progress bar for file processing
@@ -218,6 +159,7 @@ def process_data(file_path):
     progress_bar.progress(80)
     
     # Extract insights
+    timeline = apply_filters(timeline, {})
     compromised_events = detect_compromised_events(timeline)
     files_accessed = filter_files_accessed(timeline)
     anomalous_ips = filter_anomalous_ips(timeline)
@@ -240,9 +182,10 @@ if uploaded_file is not None:
     try:
         # Reset session state if a new file is uploaded
         current_file = getattr(st.session_state, 'current_file', None) 
-        if current_file != uploaded_file.name:
+        file_identity = hashlib.sha256(uploaded_file.getbuffer()).hexdigest()
+        if current_file != file_identity:
             st.session_state.processed = False
-            st.session_state.current_file = uploaded_file.name
+            st.session_state.current_file = file_identity
         
         # Only process the file if we haven't already done so for this file
         if not st.session_state.processed:
@@ -250,10 +193,11 @@ if uploaded_file is not None:
             temp_file_path = save_uploaded_file(uploaded_file)
             # Process the file only if we have a valid file path
             if temp_file_path:
-                process_data(temp_file_path)
-                # Clean up temporary file when done
-                if os.path.exists(temp_file_path):
-                    os.unlink(temp_file_path)
+                try:
+                    process_data(temp_file_path)
+                finally:
+                    if os.path.exists(temp_file_path):
+                        os.unlink(temp_file_path)
             else:
                 st.error("Failed to save uploaded file. Please try again.")
         
@@ -308,153 +252,63 @@ if uploaded_file is not None:
             if active_filters:
                 st.info(f"🔍 **Active Filters:** {' | '.join(active_filters)}")
             
-            # Add legend for risk levels
-            st.markdown("""
-            **Risk Level Legend:**
-            <div style="display: flex; gap: 20px; margin: 10px 0;">
-                <span style="background-color: #ff4444; color: white; padding: 4px 8px; border-radius: 4px;">High Risk</span>
-                <span style="background-color: #ff8800; color: white; padding: 4px 8px; border-radius: 4px;">Medium Risk</span>
-                <span style="background-color: #44aa44; color: white; padding: 4px 8px; border-radius: 4px;">Low Risk</span>
-            </div>
-            """, unsafe_allow_html=True)
-            
             # Display summary statistics
             col1, col2, col3, col4 = st.columns(4)
             total_before = len(st.session_state.timeline)
             col1.metric("Total Events", f"{len(timeline_filtered)}", delta=f"{len(timeline_filtered) - total_before}" if active_filters else None)
             col2.metric("Suspicious Events", len(compromised_events))
             col3.metric("Files Accessed", len(files_accessed))
-            col4.metric("Anomalous IPs", len(anomalous_ips))
+            col4.metric("Anomalous IPs", len({event.get("ClientIP") for event in anomalous_ips}))
             
             # Create tabs for different views
             tab1, tab2, tab3, tab4 = st.tabs(["Map View", "Suspicious Events", "Files Accessed", "All Events"])
             
             with tab1:
                 st.subheader("Anomalous IP Activity Map")
-                st.markdown("Red markers indicate locations with anomalous IP activity. Click on a marker to see details.")
-                
-                # Create and display the map
-                if anomalous_ips:
-                    map_data = create_map(anomalous_ips)
-                    st_folium(map_data, width=1200, height=600)
+                st.caption("Hover for the latest time, action and location. Click a pin to browse its events below; zoom into clusters to select a pin. Times are UTC.")
+                groups = group_locations(anomalous_ips)
+                if groups:
+                    if st.session_state.get('map_events') != anomalous_ips:
+                        st.session_state.activity_map = create_activity_map(groups)
+                        st.session_state.map_events = anomalous_ips
+                    result = st_folium(st.session_state.activity_map, height=520,
+                                       use_container_width=True, key="activity_map",
+                                       returned_objects=["last_object_clicked"])
+                    selected = result.get("last_object_clicked") if result else None
+                    keys = list(groups)
+                    if selected and selected != st.session_state.get('last_map_click'):
+                        st.session_state.last_map_click = selected
+                        closest = min(keys, key=lambda p: abs(p[0]-selected['lat']) + abs(p[1]-selected['lng']))
+                        st.session_state.selected_location = closest
+                    saved = st.session_state.get('selected_location')
+                    index = keys.index(saved) if saved in keys else 0
+                    location = st.selectbox("Location events", keys, index=index,
+                        format_func=lambda p: f"{groups[p][0].get('City', 'Unknown')}, {groups[p][0].get('Region', 'Unknown')}, {groups[p][0].get('Country', 'Unknown')} · {len(groups[p]):,} events · {p[0]:.3f}, {p[1]:.3f}")
+                    st.dataframe(event_table(groups[location]), use_container_width=True, hide_index=True)
                 else:
-                    st.info("No anomalous IP activity detected in the data.")
-                
-                # Display anomalous IP events in a table
-                if anomalous_ips:
-                    st.subheader("Anomalous IP Events")
-                    # Convert to DataFrame for better display
-                    anomalous_df = pd.DataFrame(anomalous_ips)
-                    # Format timestamp column
-                    if 'Timestamp' in anomalous_df.columns:
-                        anomalous_df['Timestamp'] = pd.to_datetime(anomalous_df['Timestamp']).dt.strftime('%Y-%m-%d %H:%M:%S')
-                    
-                    # Add color coding for risk levels if available
-                    if 'RiskLevel' in anomalous_df.columns:
-                        def highlight_risk(val):
-                            if val == 'High':
-                                return 'background-color: #ff4444; color: white'
-                            elif val == 'Medium':
-                                return 'background-color: #ff8800; color: white'
-                            elif val == 'Low':
-                                return 'background-color: #44aa44; color: white'
-                            return ''
-                        styled_df = anomalous_df.style.applymap(highlight_risk, subset=['RiskLevel'])
-                        st.dataframe(styled_df)
+                    st.info("No geolocated anomalous events match the current filters.")
+                omitted = len(anomalous_ips) - sum(map(len, groups.values()))
+                if omitted:
+                    st.caption(f"{omitted:,} events have no usable map coordinates. They remain in the event tables.")
+                with st.expander("All anomalous IP events"):
+                    st.dataframe(event_table(anomalous_ips), use_container_width=True, hide_index=True)
+
+            for tab, title, events in [(tab2, "Suspicious Events", compromised_events),
+                                       (tab3, "Files Accessed", files_accessed),
+                                       (tab4, "All Events", timeline_filtered)]:
+                with tab:
+                    st.subheader(title)
+                    if events:
+                        st.dataframe(event_table(events), use_container_width=True, hide_index=True)
                     else:
-                        st.dataframe(anomalous_df)
-            
-            with tab2:
-                st.subheader("Suspicious Events")
-                if compromised_events:
-                    compromised_df = pd.DataFrame(compromised_events)
-                    # Format timestamp column
-                    if 'Timestamp' in compromised_df.columns:
-                        compromised_df['Timestamp'] = pd.to_datetime(compromised_df['Timestamp']).dt.strftime('%Y-%m-%d %H:%M:%S')
-                    
-                    # Add color coding for risk levels if available
-                    if 'RiskLevel' in compromised_df.columns:
-                        def highlight_risk(val):
-                            if val == 'High':
-                                return 'background-color: #ff4444; color: white'
-                            elif val == 'Medium':
-                                return 'background-color: #ff8800; color: white'
-                            elif val == 'Low':
-                                return 'background-color: #44aa44; color: white'
-                            return ''
-                        styled_df = compromised_df.style.applymap(highlight_risk, subset=['RiskLevel'])
-                        st.dataframe(styled_df)
-                    else:
-                        st.dataframe(compromised_df)
-                else:
-                    st.info("No suspicious events detected in the data.")
-            
-            with tab3:
-                st.subheader("Files Accessed")
-                if files_accessed:
-                    files_df = pd.DataFrame(files_accessed)
-                    # Format timestamp column
-                    if 'Timestamp' in files_df.columns:
-                        files_df['Timestamp'] = pd.to_datetime(files_df['Timestamp']).dt.strftime('%Y-%m-%d %H:%M:%S')
-                    
-                    # Add color coding for risk levels if available
-                    if 'RiskLevel' in files_df.columns:
-                        def highlight_risk(val):
-                            if val == 'High':
-                                return 'background-color: #ff4444; color: white'
-                            elif val == 'Medium':
-                                return 'background-color: #ff8800; color: white'
-                            elif val == 'Low':
-                                return 'background-color: #44aa44; color: white'
-                            return ''
-                        styled_df = files_df.style.applymap(highlight_risk, subset=['RiskLevel'])
-                        st.dataframe(styled_df)
-                    else:
-                        st.dataframe(files_df)
-                else:
-                    st.info("No file access events found in the data.")
-            
-            with tab4:
-                st.subheader("All Events")
-                timeline_df = pd.DataFrame(timeline_filtered)
-                # Format timestamp column and add new columns if they exist
-                if 'Timestamp' in timeline_df.columns:
-                    timeline_df['Timestamp'] = pd.to_datetime(timeline_df['Timestamp']).dt.strftime('%Y-%m-%d %H:%M:%S')
-                
-                # Show additional analysis columns if present
-                if 'RiskLevel' in timeline_df.columns:
-                    # Reorder columns to show risk level and anomaly types prominently
-                    cols = list(timeline_df.columns)
-                    priority_cols = ['Timestamp', 'RiskLevel', 'AnomalyTypes', 'Operation', 'ClientIP', 'Country', 'UserId']
-                    new_order = []
-                    for col in priority_cols:
-                        if col in cols:
-                            new_order.append(col)
-                            cols.remove(col)
-                    new_order.extend(cols)
-                    timeline_df = timeline_df[new_order]
-                    
-                    # Add color coding for risk levels
-                    def highlight_risk(val):
-                        if val == 'High':
-                            return 'background-color: #ff4444; color: white'
-                        elif val == 'Medium':
-                            return 'background-color: #ff8800; color: white'
-                        elif val == 'Low':
-                            return 'background-color: #44aa44; color: white'
-                        return ''
-                    
-                    styled_df = timeline_df.style.applymap(highlight_risk, subset=['RiskLevel'])
-                    st.dataframe(styled_df)
-                else:
-                    st.dataframe(timeline_df)
-            
+                        st.info("No events match the current filters.")
+
             # Option to download results
             st.subheader("Download Results")
             
             # Prepare data for download
             output = {
-                "timeline": timeline,
+                "timeline": timeline_filtered,
                 "compromised_events": compromised_events,
                 "files_accessed": files_accessed,
                 "anomalous_ips": anomalous_ips

@@ -38,89 +38,81 @@ Upload your CSV or Excel file to analyze the data and visualize suspicious activ
 # Add file upload widget
 uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx", "xls"])
 
-# Add filtering options in sidebar
-st.sidebar.header("🔍 Anomaly Filters")
-st.sidebar.markdown("Customize which types of anomalies to display:")
+# Keep filters in a compact horizontal toolbar above the results.
+def reset_filters():
+    defaults = {
+        'risk_filter': ['High', 'Medium', 'Low'],
+        'anomaly_type_filter': [],
+        'enable_geo_filter': False,
+        'excluded_countries': ['Local'],
+        'enable_time_filter': False,
+        'time_filter_type': 'Business Hours Only',
+        'start_time': None,
+        'end_time': None,
+        'enable_ip_filter': False,
+        'ip_filter_options': [],
+    }
+    st.session_state.update(defaults)
 
-# Initialize filter states if not already set
-if 'filter_by_risk_level' not in st.session_state:
-    st.session_state.filter_by_risk_level = ['High', 'Medium', 'Low']
-if 'filter_by_operation' not in st.session_state:
-    st.session_state.filter_by_operation = []
-if 'filter_by_country' not in st.session_state:
-    st.session_state.filter_by_country = []
-if 'filter_by_date_range' not in st.session_state:
-    st.session_state.filter_by_date_range = False
 
-# Risk Level Filter
-st.sidebar.subheader("Risk Level")
-risk_levels = st.sidebar.multiselect(
-    "Select risk levels to display:",
-    options=['High', 'Medium', 'Low'],
-    default=st.session_state.filter_by_risk_level,
-    key='risk_filter'
-)
-st.session_state.filter_by_risk_level = risk_levels
+st.session_state.setdefault('risk_filter', ['High', 'Medium', 'Low'])
+st.session_state.setdefault('excluded_countries', ['Local'])
 
-# Anomaly Type Filter
-st.sidebar.subheader("Anomaly Types")
-anomaly_types = st.sidebar.multiselect(
-    "Select anomaly types:",
-    options=['Geographic Anomaly', 'Time Anomaly', 'Access Pattern Anomaly', 'Failed Authentication', 'Privilege Escalation'],
-    default=[],
-    key='anomaly_type_filter'
-)
+with st.container(border=True):
+    heading, reset = st.columns([4, 1], vertical_alignment="center")
+    heading.markdown("**Anomaly filters**")
+    reset.button("Reset All Filters", on_click=reset_filters, use_container_width=True)
+    risk_col, anomaly_col, geo_col, time_col, ip_col = st.columns([2, 3, 2, 2, 2])
+    with risk_col:
+        risk_levels = st.multiselect(
+            "Risk levels", ['High', 'Medium', 'Low'],
+            key='risk_filter'
+        )
+    with anomaly_col:
+        anomaly_types = st.multiselect(
+            "Anomaly types",
+            ['Geographic Anomaly', 'Time Anomaly', 'Access Pattern Anomaly',
+             'Failed Authentication', 'Privilege Escalation'],
+            key='anomaly_type_filter'
+        )
+    with geo_col:
+        st.markdown("Location")
+        with st.popover("Geographic filter", use_container_width=True):
+            enable_geo_filter = st.checkbox("Filter by geographic location", key='enable_geo_filter')
+            excluded_countries = st.multiselect(
+                "Exclude countries:",
+                ['Unknown', 'Local', 'US', 'CA', 'GB', 'DE', 'FR', 'JP', 'AU'],
+                key='excluded_countries', disabled=not enable_geo_filter,
+                help="Select countries to exclude from results"
+            )
+    with time_col:
+        st.markdown("Time")
+        with st.popover("Time filter", use_container_width=True):
+            st.caption("All times are UTC.")
+            enable_time_filter = st.checkbox("Filter by time period", key='enable_time_filter')
+            time_filter_type = st.selectbox(
+                "Time filter type:",
+                ['Business Hours Only', 'Outside Business Hours', 'Weekends Only', 'Custom Range'],
+                key='time_filter_type', disabled=not enable_time_filter
+            )
+            if time_filter_type == 'Custom Range':
+                start_time = st.time_input("Start time", value=None, key='start_time', disabled=not enable_time_filter)
+                end_time = st.time_input("End time", value=None, key='end_time', disabled=not enable_time_filter)
+    with ip_col:
+        st.markdown("IP patterns")
+        with st.popover("IP pattern filter", use_container_width=True):
+            enable_ip_filter = st.checkbox("Filter by IP patterns", key='enable_ip_filter')
+            ip_filter_options = st.multiselect(
+                "IP pattern types:",
+                ['First-time IPs', 'Frequent IPs', 'Single-use IPs', 'Cross-country IPs'],
+                key='ip_filter_options', disabled=not enable_ip_filter,
+                help="Filter based on IP usage patterns"
+            )
 
-# Geographic Filter
-st.sidebar.subheader("Geographic Filter")
-enable_geo_filter = st.sidebar.checkbox("Filter by geographic location", value=False)
-if enable_geo_filter:
-    excluded_countries = st.sidebar.multiselect(
-        "Exclude countries:",
-        options=['Unknown', 'Local', 'US', 'CA', 'GB', 'DE', 'FR', 'JP', 'AU'],
-        default=['Local'],
-        help="Select countries to exclude from results"
-    )
-else:
+if not enable_geo_filter:
     excluded_countries = []
-
-# Time-based Filter
-st.sidebar.subheader("Time Filter")
-enable_time_filter = st.sidebar.checkbox("Filter by time period", value=False)
-if enable_time_filter:
-    time_filter_type = st.sidebar.selectbox(
-        "Time filter type:",
-        options=['Business Hours Only', 'Outside Business Hours', 'Weekends Only', 'Custom Range']
-    )
-    if time_filter_type == 'Custom Range':
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            start_time = st.time_input("Start time", value=None)
-        with col2:
-            end_time = st.time_input("End time", value=None)
-else:
-    time_filter_type = None
-
-# IP Pattern Filter
-st.sidebar.subheader("IP Pattern Filter")
-enable_ip_filter = st.sidebar.checkbox("Filter by IP patterns", value=False)
-if enable_ip_filter:
-    ip_filter_options = st.sidebar.multiselect(
-        "IP pattern types:",
-        options=['First-time IPs', 'Frequent IPs', 'Single-use IPs', 'Cross-country IPs'],
-        default=[],
-        help="Filter based on IP usage patterns"
-    )
-else:
+if not enable_ip_filter:
     ip_filter_options = []
-
-# Reset filters button
-if st.sidebar.button("Reset All Filters"):
-    st.session_state.filter_by_risk_level = ['High', 'Medium', 'Low']
-    st.session_state.filter_by_operation = []
-    st.session_state.filter_by_country = []
-    st.session_state.filter_by_date_range = False
-    st.rerun()
 
 # Function to save uploaded file temporarily
 def save_uploaded_file(uploaded_file):

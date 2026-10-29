@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Microsoft Purview Security Analyzer</title>
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <h2>🔍 Anomaly Filters</h2>
+      <p class="muted">Customize which types of anomalies to display:</p>
+
+      <section class="filter-group">
+        <h3>Risk Level</h3>
+        <p class="label">Select risk levels to display:</p>
+        <div class="checks" id="risk-levels">
+          <label><input type="checkbox" value="High" checked> High</label>
+          <label><input type="checkbox" value="Medium" checked> Medium</label>
+          <label><input type="checkbox" value="Low" checked> Low</label>
+        </div>
+      </section>
+
+      <section class="filter-group">
+        <h3>Anomaly Types</h3>
+        <p class="label">Select anomaly types:</p>
+        <div class="checks" id="anomaly-types">
+          <label><input type="checkbox" value="Geographic Anomaly"> Geographic Anomaly</label>
+          <label><input type="checkbox" value="Time Anomaly"> Time Anomaly</label>
+          <label><input type="checkbox" value="Access Pattern Anomaly"> Access Pattern Anomaly</label>
+          <label><input type="checkbox" value="Failed Authentication"> Failed Authentication</label>
+          <label><input type="checkbox" value="Privilege Escalation"> Privilege Escalation</label>
+        </div>
+      </section>
+
+      <section class="filter-group">
+        <h3>Geographic Filter</h3>
+        <label class="toggle"><input type="checkbox" id="geo-enabled"> Filter by geographic location</label>
+        <div id="geo-options" hidden>
+          <p class="label" title="Select countries to exclude from results">Exclude countries:</p>
+          <div class="checks" id="excluded-countries">
+            <label><input type="checkbox" value="Unknown"> Unknown</label>
+            <label><input type="checkbox" value="Local" checked> Local</label>
+            <label><input type="checkbox" value="US"> US</label>
+            <label><input type="checkbox" value="CA"> CA</label>
+            <label><input type="checkbox" value="GB"> GB</label>
+            <label><input type="checkbox" value="DE"> DE</label>
+            <label><input type="checkbox" value="FR"> FR</label>
+            <label><input type="checkbox" value="JP"> JP</label>
+            <label><input type="checkbox" value="AU"> AU</label>
+          </div>
+        </div>
+      </section>
+
+      <section class="filter-group">
+        <h3>Time Filter</h3>
+        <label class="toggle"><input type="checkbox" id="time-enabled"> Filter by time period</label>
+        <div id="time-options" hidden>
+          <label class="label" for="time-type">Time filter type:</label>
+          <select id="time-type">
+            <option>Business Hours Only</option>
+            <option>Outside Business Hours</option>
+            <option>Weekends Only</option>
+            <option>Custom Range</option>
+          </select>
+          <div id="custom-range" class="range" hidden>
+            <label>Start time <input type="time" id="start-time" step="1"></label>
+            <label>End time <input type="time" id="end-time" step="1"></label>
+          </div>
+        </div>
+      </section>
+
+      <section class="filter-group">
+        <h3>IP Pattern Filter</h3>
+        <label class="toggle"><input type="checkbox" id="ip-enabled"> Filter by IP patterns</label>
+        <div id="ip-options" hidden>
+          <p class="label" title="Filter based on IP usage patterns">IP pattern types:</p>
+          <div class="checks" id="ip-patterns">
+            <label><input type="checkbox" value="First-time IPs"> First-time IPs</label>
+            <label><input type="checkbox" value="Frequent IPs"> Frequent IPs</label>
+            <label><input type="checkbox" value="Single-use IPs"> Single-use IPs</label>
+            <label><input type="checkbox" value="Cross-country IPs"> Cross-country IPs</label>
+          </div>
+        </div>
+      </section>
+
+      <button type="button" class="button secondary" id="reset-filters">Reset All Filters</button>
+    </aside>
+
+    <main class="main">
+      <h1>Microsoft Purview Security Analyzer</h1>
+      <p>This tool helps identify anomalous IP activities and potentially compromised events in audit logs.
+        Upload your CSV or Excel file to analyze the data and visualize suspicious activities on the map.</p>
+
+      <label class="upload" for="file-input">
+        <span class="upload-title">Upload CSV or Excel file</span>
+        <span class="muted" id="file-name">Drag a file here or click to browse. CSV, XLSX, XLS</span>
+        <input type="file" id="file-input" accept=".csv,.xlsx,.xls">
+      </label>
+
+      <div id="status" class="status" hidden>
+        <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+        <p id="status-text"></p>
+      </div>
+      <div id="message" class="message" hidden></div>
+
+      <section id="empty-state">
+        <div class="message info">Please upload a CSV or Excel file containing audit logs to begin analysis.</div>
+        <h2>Expected Data Format</h2>
+        <p>The uploaded file should contain audit log data with at least the following columns:</p>
+        <ul>
+          <li>CreationDate: Timestamp of the event</li>
+          <li>Operation: Type of operation performed</li>
+          <li>UserId: User identifier</li>
+          <li>AuditData: JSON data containing details like ClientIP</li>
+        </ul>
+        <p>Other columns will be used if available but are not required.</p>
+        <h2>Analysis Capabilities</h2>
+        <p>This tool will:</p>
+        <ol>
+          <li>Identify anomalous IP addresses based on geolocation</li>
+          <li>Detect potentially compromised events</li>
+          <li>Track file access operations</li>
+          <li>Visualize suspicious activities on an interactive map</li>
+          <li>Provide detailed tables of all events for further investigation</li>
+        </ol>
+      </section>
+
+      <section id="results" hidden>
+        <div id="active-filters" class="message info" hidden></div>
+
+        <p><strong>Risk Level Legend:</strong></p>
+        <div class="legend">
+          <span class="risk risk-High">High Risk</span>
+          <span class="risk risk-Medium">Medium Risk</span>
+          <span class="risk risk-Low">Low Risk</span>
+        </div>
+
+        <div class="metrics">
+          <div class="metric"><span class="metric-label">Total Events</span><span class="metric-value" id="m-total"></span><span class="metric-delta" id="m-total-delta"></span></div>
+          <div class="metric"><span class="metric-label">Suspicious Events</span><span class="metric-value" id="m-suspicious"></span></div>
+          <div class="metric"><span class="metric-label">Files Accessed</span><span class="metric-value" id="m-files"></span></div>
+          <div class="metric"><span class="metric-label">Anomalous IPs</span><span class="metric-value" id="m-anomalous"></span></div>
+        </div>
+
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" class="tab active" data-tab="map">Map View</button>
+          <button type="button" role="tab" class="tab" data-tab="suspicious">Suspicious Events</button>
+          <button type="button" role="tab" class="tab" data-tab="files">Files Accessed</button>
+          <button type="button" role="tab" class="tab" data-tab="all">All Events</button>
+        </div>
+
+        <div class="tab-panel" id="panel-map">
+          <h2>Anomalous IP Activity Map</h2>
+          <p>Red markers indicate locations with anomalous IP activity. Click on a marker to see details.</p>
+          <div id="map"></div>
+          <div id="map-empty" class="message info" hidden>No anomalous IP activity detected in the data.</div>
+          <div id="anomalous-section">
+            <h2>Anomalous IP Events</h2>
+            <div id="table-anomalous"></div>
+          </div>
+        </div>
+        <div class="tab-panel" id="panel-suspicious" hidden>
+          <h2>Suspicious Events</h2>
+          <div id="table-suspicious"></div>
+        </div>
+        <div class="tab-panel" id="panel-files" hidden>
+          <h2>Files Accessed</h2>
+          <div id="table-files"></div>
+        </div>
+        <div class="tab-panel" id="panel-all" hidden>
+          <h2>All Events</h2>
+          <div id="table-all"></div>
+        </div>
+
+        <h2>Download Results</h2>
+        <button type="button" class="button" id="download">Download Results as JSON</button>
+      </section>
+    </main>
+  </div>
+
+  <script src="/vendor/leaflet/leaflet.js"></script>
+  <script src="/vendor/papaparse/papaparse.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

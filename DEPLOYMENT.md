@@ -12,7 +12,33 @@ pip install streamlit pandas folium streamlit-folium geoip2 openpyxl trafilatura
 streamlit run app_new.py
 ```
 
+### Web app (FastAPI + browser front end)
+```bash
+pip install fastapi uvicorn pandas geoip2 openpyxl
+uvicorn backend.dev:app --reload
+```
+Then open http://localhost:8000. This is the same app that runs on Vercel.
+
 ## Production Deployment Options
+
+### Vercel
+
+The web app runs on Vercel without extra configuration. Streamlit cannot: it needs a
+long-running server with WebSockets, which Vercel Functions don't provide.
+
+**How it is laid out**:
+- `backend/server.py`: FastAPI app (the Vercel entrypoint, set in `[tool.vercel]` in `pyproject.toml`). It runs the analysis in `security_analyzer.py`.
+- `public/`: the front end (HTML, CSS, JS, plus vendored Leaflet and PapaParse), served from Vercel's CDN.
+- No `vercel.json` is needed. The function bundle (dependencies plus the 58 MB GeoLite2 database) is about 250 MB, under Vercel's 500 MB Python limit.
+
+**Steps**:
+1. Import the repository in Vercel (or run `vercel deploy`)
+2. Set the framework preset to FastAPI (Project Settings > Build and Deployment). With the "Other" preset Vercel only serves `public/` and the API is missing. No build command or environment variables are needed
+
+**Limits to know**:
+- Vercel caps request bodies at 4.5 MB. CSV exports are trimmed in the browser to the four columns and three AuditData fields the analysis reads, then gzipped, so exports of tens of MB fit. Excel files are sent as-is, so they are limited to about 4.4 MB; export CSV from Purview for larger logs.
+- Responses are gzip-compressed and sent column-wise to stay under the same cap.
+- Each request is analyzed independently and nothing is stored on the server. Filters run in the browser.
 
 ### 1. Streamlit Cloud (Recommended)
 

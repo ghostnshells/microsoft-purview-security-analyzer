@@ -29,12 +29,27 @@ classifiers = [
     "Topic :: Internet :: Log Analysis"
 ]
 requires-python = ">=3.11"
+# Runtime dependencies for the web app (FastAPI backend, deployed on Vercel).
+# Keep this list lean: Vercel bundles every listed package into the function.
 dependencies = [
-    "folium>=0.19.5",
+    "fastapi>=0.117.1",
     "geoip2>=5.0.1",
     "openpyxl>=3.1.5",
     "pandas>=2.2.3",
+]
+
+[project.optional-dependencies]
+# Local development server for the web app: uvicorn backend.dev:app --reload
+dev = [
+    "uvicorn>=0.30.0",
+]
+# The original Streamlit app: streamlit run app_new.py
+streamlit = [
+    "folium>=0.19.5",
     "streamlit-folium>=0.25.0",
     "streamlit>=1.44.1",
     "trafilatura>=2.0.0",
 ]
+
+[tool.vercel]
+entrypoint = "backend.server:app"

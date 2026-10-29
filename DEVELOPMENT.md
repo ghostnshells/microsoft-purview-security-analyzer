@@ -231,3 +231,16 @@ location below the map to browse all its events in a separate table. Events
 without usable coordinates remain available in the event tables. Displayed
 timestamps and time-based filters use UTC; timestamps without an offset are
 interpreted as UTC. Unparseable timestamps display as Unknown.
+
+### Vercel frontend checks
+
+Vercel serves `public/` with the API in `backend/server.py`; changes to the
+Streamlit UI in `app_new.py` do not change the Vercel interface.
+
+With `uvicorn backend.dev:app` running, `node tests/frontend.cjs` exercises the
+actual browser frontend using Playwright and Chromium. Install Playwright in the
+Node environment first; set `CHROMIUM_PATH` if Chromium is not at
+`/usr/bin/chromium`, and `TEST_URL` to override the local test server URL. The
+check uploads synthetic audit data and verifies desktop/mobile filters, reset,
+location tables, pagination, search, and map hover/click interactions. External
+map tile requests are blocked during this check.

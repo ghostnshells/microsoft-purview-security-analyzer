@@ -2,7 +2,7 @@
 //
 // The analysis runs in the Python API (backend/server.py). This page reads the
 // upload, trims CSV exports to the fields the analysis uses so they fit
-// Vercel's 4.5 MB request limit, and applies the sidebar filters locally, the
+// Vercel's 4.5 MB request limit, and applies the toolbar filters locally, the
 // same way apply_filters() in security_analyzer.py does.
 
 (function () {
@@ -15,8 +15,7 @@
   const AUDIT_FIELDS = ['ClientIP', 'ResultStatus', 'SourceFileName'];
   const REQUIRED_COLUMNS = ['CreationDate', 'Operation', 'UserId', 'AuditData'];
   const ALL_RISK_LEVELS = ['High', 'Medium', 'Low'];
-  // Events listed in one map popup; large exports can put thousands at one spot
-  const MAX_POPUP_EVENTS = 50;
+
 
   const $ = (id) => document.getElementById(id);
 
@@ -303,7 +302,7 @@
 
   function ensureMap() {
     if (state.map) return;
-    state.map = L.map('map').setView([20, 0], 2);
+    state.map = L.map('map', { preferCanvas: true }).setView([20, 0], 2);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 18,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -311,52 +310,69 @@
     state.markerLayer = L.layerGroup().addTo(state.map);
   }
 
+  let mapLocations = new Map();
+  let selectedLocation = null;
+
+  function showLocation(key) {
+    const loc = mapLocations.get(key);
+    if (!loc) return;
+    selectedLocation = key;
+    $('location-select').value = key;
+    $('location-summary').textContent = `${loc.events.length.toLocaleString()} events at ${loc.lat.toFixed(3)}, ${loc.lon.toFixed(3)} · Times are UTC`;
+    state.tables.location.setRows(loc.events, Object.keys(state.events[0] || {}));
+  }
+
   function renderMap(anomalous) {
-    const hasEvents = anomalous.length > 0;
-    $('map').hidden = !hasEvents;
-    $('map-empty').hidden = hasEvents;
-    $('anomalous-section').hidden = !hasEvents;
-    if (!hasEvents) return;
-
-    ensureMap();
-    state.markerLayer.clearLayers();
-
     const locations = new Map();
     for (const e of anomalous) {
-      if (e.Country === 'Unknown' || e.Region === 'Unknown') continue;
-      const lat = e.Latitude || 0;
-      const lon = e.Longitude || 0;
-      if (lat === 0 && lon === 0) continue;
+      const lat = e.Latitude;
+      const lon = e.Longitude;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
+      if ((lat === 0 && lon === 0) || e.Country === 'Unknown' || e.Country === 'Local') continue;
       const key = `${lat}_${lon}`;
       if (!locations.has(key)) locations.set(key, { lat, lon, events: [] });
       locations.get(key).events.push(e);
     }
+    mapLocations = locations;
+    const hasLocations = locations.size > 0;
+    $('map').hidden = !hasLocations;
+    $('map-empty').hidden = hasLocations;
+    $('map-empty').textContent = 'No geolocated anomalous events match the current filters.';
+    $('location-details').hidden = !hasLocations;
+    $('anomalous-section').hidden = anomalous.length === 0;
+    const mapped = Array.from(locations.values()).reduce((n, loc) => n + loc.events.length, 0);
+    $('map-omitted').textContent = anomalous.length > mapped
+      ? `${anomalous.length - mapped} events have no usable map coordinates. They remain in the event tables.` : '';
+    $('location-select').replaceChildren();
+    if (!hasLocations) return;
 
-    for (const loc of locations.values()) {
-      let html = '<div><h4>Location Events</h4>';
-      loc.events.slice(0, MAX_POPUP_EVENTS).forEach((e, i) => {
-        html += '<div class="popup-event">'
-          + `<p><b>Event ${i + 1}</b></p>`
-          + `<p><b>IP Address:</b> ${escapeHtml(e.ClientIP)}</p>`
-          + `<p><b>Timestamp:</b> ${escapeHtml(e.Timestamp)}</p>`
-          + `<p><b>Operation:</b> ${escapeHtml(e.Operation)}</p>`
-          + `<p><b>User ID:</b> ${escapeHtml(e.UserId)}</p>`
-          + `<p><b>Location:</b> ${escapeHtml(e.Region)}, ${escapeHtml(e.Country)}</p>`
-          + '</div>';
-      });
-      if (loc.events.length > MAX_POPUP_EVENTS) {
-        html += `<p><i>...and ${loc.events.length - MAX_POPUP_EVENTS} more events</i></p>`;
-      }
-      html += '</div>';
-      L.circleMarker([loc.lat, loc.lon], {
-        radius: 9, color: '#b30000', weight: 2, fillColor: '#ff4444', fillOpacity: 0.85,
-      })
-        .bindPopup(html, { maxWidth: 350 })
-        .bindTooltip(`${loc.events.length} event(s) at this location`)
+    ensureMap();
+    state.markerLayer.clearLayers();
+    const bounds = [];
+    for (const [key, loc] of locations) {
+      const latest = loc.events.reduce((a, b) => (b.Timestamp || '') > (a.Timestamp || '') ? b : a);
+      const place = [latest.City, latest.Region, latest.Country].filter(Boolean).join(', ');
+      const option = document.createElement('option');
+      option.value = key;
+      option.textContent = `${place} · ${loc.events.length.toLocaleString()} events · ${loc.lat.toFixed(3)}, ${loc.lon.toFixed(3)}`;
+      $('location-select').append(option);
+      const tooltip = `<strong>${escapeHtml(place.slice(0, 160))}</strong><br>`
+        + `${loc.events.length.toLocaleString()} events<br>`
+        + `Latest: ${escapeHtml(latest.Timestamp || 'Unknown time')}${latest.Timestamp ? ' UTC' : ''}<br>`
+        + `${escapeHtml(String(latest.Operation || 'Unknown action').slice(0, 100))}<br>Click to browse events below`;
+      const point = [loc.lat, loc.lon];
+      bounds.push(point);
+      L.circleMarker(point, {
+        radius: Math.min(16, 7 + Math.log2(loc.events.length + 1)), color: '#b30000', weight: 2, fillColor: '#ff4444', fillOpacity: 0.85,
+      }).bindTooltip(tooltip, { className: 'activity-tooltip', direction: 'auto' })
+        .on('click', () => showLocation(key))
         .addTo(state.markerLayer);
     }
-    // The map may have been laid out while its tab was hidden
-    setTimeout(() => state.map.invalidateSize(), 0);
+    showLocation(locations.has(selectedLocation) ? selectedLocation : locations.keys().next().value);
+    setTimeout(() => {
+      state.map.invalidateSize();
+      state.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 10 });
+    }, 0);
   }
 
   // A sortable, searchable, paged table
@@ -495,7 +511,7 @@
     $('m-total-delta').textContent = active.length ? (delta > 0 ? '+' : '') + delta : '';
     $('m-suspicious').textContent = filtered.compromised.length;
     $('m-files').textContent = filtered.filesAccessed.length;
-    $('m-anomalous').textContent = filtered.anomalous.length;
+    $('m-anomalous').textContent = new Set(filtered.anomalous.map((event) => event.ClientIP)).size;
 
     const columns = Object.keys(state.events[0] || {});
     state.tables.anomalous.setRows(filtered.anomalous, columns);
@@ -508,7 +524,7 @@
   function downloadResults() {
     if (!state.events || !lastFiltered) return;
     const output = {
-      timeline: state.events,
+      timeline: lastFiltered.timeline,
       compromised_events: lastFiltered.compromised,
       files_accessed: lastFiltered.filesAccessed,
       anomalous_ips: lastFiltered.anomalous,
@@ -559,11 +575,23 @@
   }
 
   function init() {
+    state.tables.location = createTable('table-location', 'No events at this location.');
+    $('location-select').addEventListener('change', () => showLocation($('location-select').value));
     state.tables.anomalous = createTable('table-anomalous', 'No anomalous IP activity detected in the data.');
     state.tables.suspicious = createTable('table-suspicious', 'No suspicious events detected in the data.');
     state.tables.files = createTable('table-files', 'No file access events found in the data.');
     state.tables.all = createTable('table-all', 'No events match the current filters.');
 
+    const filterGroups = document.querySelectorAll('.filter-group');
+    filterGroups.forEach((group) => group.addEventListener('toggle', () => {
+      if (group.open) filterGroups.forEach((other) => { if (other !== group) other.open = false; });
+    }));
+    document.addEventListener('click', (event) => {
+      if (!event.target.closest('.filter-group')) filterGroups.forEach((group) => { group.open = false; });
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') filterGroups.forEach((group) => { group.open = false; });
+    });
     const input = $('file-input');
     input.addEventListener('change', () => handleFile(input.files[0]));
 
@@ -576,7 +604,7 @@
       handleFile(e.dataTransfer.files[0]);
     });
 
-    document.querySelectorAll('#sidebar .checks input').forEach((el) => {
+    document.querySelectorAll('#filters .checks input').forEach((el) => {
       el.addEventListener('change', render);
     });
     bindToggle('geo-enabled', 'geo-options');
